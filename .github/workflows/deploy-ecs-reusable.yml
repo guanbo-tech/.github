@@ -6,6 +6,11 @@ on:
         description: Repository-relative JSON deployment manifest
         required: true
         type: string
+      deploy:
+        description: Deploy after publishing images; disable only for initial image provisioning
+        required: false
+        default: true
+        type: boolean
       environment:
         description: GitHub environment containing deployment access
         required: false
@@ -110,6 +115,7 @@ jobs:
           tags: ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/${{ matrix.name }}:${{ github.ref_name }}
   deploy:
     name: Deploy all services to ECS
+    if: ${{ inputs.deploy }}
     needs: [prepare, build-and-push]
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
