@@ -24,7 +24,8 @@ finish() {
   trap - EXIT
   if (( rollback_needed )); then
     echo 'Deployment failed; restoring previous container images' >&2
-    if compose "$previous" up -d --no-build --no-deps --pull never "${services[@]}"; then
+    if compose "$previous" up -d --no-build --no-deps --pull never "${services[@]}" &&
+       cp "$previous" "$COMPOSE_FILE.next" && mv "$COMPOSE_FILE.next" "$COMPOSE_FILE"; then
       echo 'Previous images restored; business health still requires verification' >&2
     else
       echo "ROLLBACK FAILED: recovery configuration retained at $previous" >&2

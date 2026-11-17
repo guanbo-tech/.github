@@ -18,10 +18,11 @@ if cmd=='docker':
  elif args[0]=='compose':
   if 'ps' in args: print('container-id')
   if 'up' in args and 'previous.json' in ' '.join(args):
+   if os.environ['CASE']=='rollback-failure': sys.exit(1)
    data=json.load(open(args[args.index('-f')+1]))
    assert data['services']['api']['image']=='sha256:original'
   if 'pull' in args and os.environ['CASE']=='pull-failure': sys.exit(1)
-elif cmd=='curl' and os.environ['CASE']=='health-failure': sys.exit(1)
+elif cmd=='curl' and os.environ['CASE'] in ['health-failure','rollback-failure']: sys.exit(1)
 '''
 
 class DeployTests(unittest.TestCase):
@@ -55,8 +56,18 @@ class DeployTests(unittest.TestCase):
     def test_health_failure_restores_actual_image(self):
         result,data,calls,original=self.exercise('health-failure')
         self.assertNotEqual(result.returncode,0)
-        self.assertEqual(data,original)
+        self.assertEqual(data['services']['api']['image'],'sha256:original')
+        self.assertEqual(data['services']['database'],original['services']['database'])
+        self.assertIn('Previous images restored', result.stderr)
+        self.assertNotIn('ROLLBACK FAILED', result.stderr)
         self.assertTrue(any('up' in call and '--pull' in call and 'never' in call for call in calls))
+
+    def test_failed_rollback_is_reported_without_persisting_it(self):
+        result,data,_,original=self.exercise('rollback-failure')
+        self.assertNotEqual(result.returncode,0)
+        self.assertEqual(data,original)
+        self.assertIn('ROLLBACK FAILED', result.stderr)
+        self.assertNotIn('Previous images restored', result.stderr)
 
     def test_pull_failure_does_not_touch_running_containers(self):
         result,data,calls,original=self.exercise('pull-failure')
