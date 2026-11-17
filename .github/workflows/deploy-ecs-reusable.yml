@@ -47,9 +47,11 @@ jobs:
           for name in ROLE_ARN OIDC_PROVIDER_ARN ACR_REGISTRY ACR_NAMESPACE ECS_INSTANCE_ID; do
             [[ -n "${!name:-}" ]] || { echo "::error::Missing deployment configuration: $name"; exit 1; }
           done
-          jq -c '.services' "$CONFIG" | sed 's/^/services=/' >> "$GITHUB_OUTPUT"
-          jq -r '.health_url // empty' "$CONFIG" | sed 's/^/health_url=/' >> "$GITHUB_OUTPUT"
-          jq -r '.deploy_script // "/opt/guanbo/deploy.sh"' "$CONFIG" | sed 's/^/deploy_script=/' >> "$GITHUB_OUTPUT"
+          {
+            printf 'services='; jq -c '.services' "$CONFIG"
+            printf 'health_url='; jq -r '.health_url // empty' "$CONFIG"
+            printf 'deploy_script='; jq -r '.deploy_script // "/opt/guanbo/deploy.sh"' "$CONFIG"
+          } >> "$GITHUB_OUTPUT"
   build-and-push:
     name: Build and push ${{ matrix.name }}
     needs: prepare
