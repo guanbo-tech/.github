@@ -52,8 +52,10 @@ with normal certificate validation. Root responses 200–499 count as reachable
 (401/404 are legitimate API roots); 5xx and TLS failures roll back routes and
 container images. This is route readiness, not business acceptance. Caddy's
 normal automatic HTTPS supplies certificates and HTTP redirects. DNS must already
-resolve to the ECS, and ACME/ports 80 and 443 must be reachable. TLS issuance may
-exceed the bounded readiness period and cause a retryable deployment failure.
+resolve to the ECS, and ACME/ports 80 and 443 must be reachable. All domains share a maximum 90-second readiness budget, capped at second 450
+of the runner to reserve 150 seconds of the remote command limit for rollback.
+Slow earlier Docker operations can still exhaust the remote limit. TLS issuance may
+exceed this bounded readiness period and cause a retryable deployment failure.
 
 Snapshots retain the complete private configuration. Process crashes/SIGKILL or
 uncooperative manual edits require operator recovery; normal errors restore the

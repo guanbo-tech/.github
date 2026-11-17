@@ -99,19 +99,29 @@ if [[ -n "${DOMAIN_ROUTES_JSON:-}" ]]; then
   routes_applied=1
   python3 "$route_helper" apply "$route_file" "$release" "$PROJECT_NAME"
   # Verify TLS and HTTP availability before committing the release.
+  # Stop readiness by second 450 of this runner, reserving 150s of the
+  # cloud command's 600s limit for normal rollback. Earlier pulls can still
+  # exhaust that limit, so this is not a crash-recovery guarantee.
+  export ROUTE_TIMEOUT_SECONDS=$((450 - SECONDS))
   python3 - <<'PYROUTES'
 import json, os, subprocess, time
-for domain in json.loads(os.environ['DOMAIN_ROUTES_JSON']):
-    for attempt in range(9):
+budget = min(90, int(os.environ['ROUTE_TIMEOUT_SECONDS']))
+deadline = time.monotonic() + max(0, budget)
+pending = list(json.loads(os.environ['DOMAIN_ROUTES_JSON']))
+while pending:
+    for domain in list(pending):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise SystemExit('HTTPS routes exceeded shared readiness deadline')
         result = subprocess.run(['curl','--silent','--show-error',
-                                 '--connect-timeout','5','--max-time','15',
+                                 '--connect-timeout',str(min(5, remaining)),
+                                 '--max-time',str(min(10, remaining)),
                                  '--output','/dev/null','--write-out','%{http_code}',
                                  f'https://{domain}/'], capture_output=True, text=True)
         if result.returncode == 0 and result.stdout.isdigit() and 200 <= int(result.stdout) < 500:
-            break
-        if attempt == 8:
-            raise SystemExit('HTTPS route readiness failed')
-        time.sleep(5)
+            pending.remove(domain)
+    if pending:
+        time.sleep(min(2, max(0, deadline - time.monotonic())))
 PYROUTES
 fi
 cp "$candidate" "$COMPOSE_FILE.next"

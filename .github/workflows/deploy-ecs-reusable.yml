@@ -53,7 +53,7 @@ jobs:
             [[ -n "${!name:-}" ]] || { echo "::error::Missing deployment configuration: $name"; exit 1; }
           done
           {
-            printf 'domain_routes='; jq -c '.domain_routes // empty' "$CONFIG"
+            printf 'domain_routes=%s\n' "$(jq -c '.domain_routes // empty' "$CONFIG")"
             printf 'services='; jq -c '.services' "$CONFIG"
             printf 'health_url='; jq -r '.health_url // empty' "$CONFIG"
             printf 'deploy_script='; jq -r '.deploy_script // "/opt/guanbo/deploy.sh"' "$CONFIG"
