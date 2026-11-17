@@ -2,6 +2,9 @@
 # Run on ECS. Compose files are JSON and contain existing runtime configuration.
 set -Eeuo pipefail
 umask 077
+# A wrapper inherits the deadline established at the remote command entry.
+export ECS_RELEASE_DEADLINE_EPOCH="${ECS_RELEASE_DEADLINE_EPOCH:-$(($(date +%s) + 450))}"
+[[ "$ECS_RELEASE_DEADLINE_EPOCH" =~ ^[0-9]+$ ]]
 VERSION="${1:?usage: deploy.sh <version>}"
 : "${ACR_REGISTRY:?}" "${ACR_NAMESPACE:?}" "${ACR_USERNAME:?}" "${ACR_PASSWORD:?}"
 : "${COMPOSE_FILE:?}" "${PROJECT_NAME:?}" "${DEPLOY_SERVICES_JSON:?}"
@@ -99,13 +102,11 @@ if [[ -n "${DOMAIN_ROUTES_JSON:-}" ]]; then
   routes_applied=1
   python3 "$route_helper" apply "$route_file" "$release" "$PROJECT_NAME"
   # Verify TLS and HTTP availability before committing the release.
-  # Stop readiness by second 450 of this runner, reserving 150s of the
-  # cloud command's 600s limit for normal rollback. Earlier pulls can still
-  # exhaust that limit, so this is not a crash-recovery guarantee.
-  export ROUTE_TIMEOUT_SECONDS=$((450 - SECONDS))
+  # The absolute deadline includes time spent in repository-specific wrappers.
+  # Reserve the remote command's final 150s for normal rollback.
   python3 - <<'PYROUTES'
 import json, os, subprocess, time
-budget = min(90, int(os.environ['ROUTE_TIMEOUT_SECONDS']))
+budget = min(90, int(os.environ['ECS_RELEASE_DEADLINE_EPOCH']) - time.time())
 deadline = time.monotonic() + max(0, budget)
 pending = list(json.loads(os.environ['DOMAIN_ROUTES_JSON']))
 while pending:

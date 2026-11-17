@@ -153,7 +153,7 @@ jobs:
           printf -v routes_q '%q' "$DOMAIN_ROUTES_JSON"
           printf -v registry_q '%q' "$ACR_REGISTRY"; printf -v namespace_q '%q' "$ACR_NAMESPACE"
           printf -v script_q '%q' "$SCRIPT"; printf -v version_q '%q' "$VERSION"
-          command_content="export DOMAIN_ROUTES_JSON=$routes_q ACR_REGISTRY=$registry_q ACR_NAMESPACE=$namespace_q ACR_USERNAME=$user_q ACR_PASSWORD=$password_q COMPOSE_FILE=$compose_q PROJECT_NAME=$project_q DEPLOY_SERVICES_JSON=$services_q LOCAL_HEALTH_URL=$health_q; bash $script_q $version_q"
+          command_content="export ECS_RELEASE_DEADLINE_EPOCH=\$((\$(date +%s) + 450)); export DOMAIN_ROUTES_JSON=$routes_q ACR_REGISTRY=$registry_q ACR_NAMESPACE=$namespace_q ACR_USERNAME=$user_q ACR_PASSWORD=$password_q COMPOSE_FILE=$compose_q PROJECT_NAME=$project_q DEPLOY_SERVICES_JSON=$services_q LOCAL_HEALTH_URL=$health_q; bash $script_q $version_q"
           invocation_id="$(aliyun ecs RunCommand --RegionId "$REGION_ID" --InstanceId.1 "$INSTANCE_ID" --Type RunShellScript --Timeout 600 --CommandContent "$command_content" --cli-query 'InvokeId' | python3 -c 'import json,sys; print(json.load(sys.stdin))')"
           for _ in $(seq 1 60); do
             status="$(aliyun ecs DescribeInvocations --RegionId "$REGION_ID" --InstanceId "$INSTANCE_ID" --InvokeId "$invocation_id" --cli-query 'Invocations.Invocation[0].InvocationStatus' | python3 -c 'import json,sys; print(json.load(sys.stdin))')"
