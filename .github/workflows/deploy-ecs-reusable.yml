@@ -105,7 +105,7 @@ jobs:
             jq '{Code,IsSuccess,RepoStatus}' <<<"$result"
             exit 1
           fi
-          result="$(aliyun cr CreateRepository "${common[@]}" --RepoType PRIVATE --Summary "GitHub Actions managed image" --RepoBuildType MANUAL)"
+          result="$(aliyun cr CreateRepository "${common[@]}" --RepoType PRIVATE --Summary "GitHub Actions managed image")"
           jq -e '.IsSuccess == true' <<<"$result" >/dev/null || { jq '{Code,IsSuccess}' <<<"$result"; exit 1; }
       - name: Get temporary ACR credentials
         id: acr
