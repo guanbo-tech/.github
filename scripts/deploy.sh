@@ -10,6 +10,8 @@ VERSION="${1:?usage: deploy.sh <version>}"
 : "${COMPOSE_FILE:?}" "${PROJECT_NAME:?}" "${DEPLOY_SERVICES_JSON:?}"
 [[ "$VERSION" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]
 [[ "$PROJECT_NAME" =~ ^[a-z0-9][a-z0-9_-]*$ ]]
+ECS_ROUTE_OWNER="${ECS_ROUTE_OWNER-$PROJECT_NAME}"
+[[ "$ECS_ROUTE_OWNER" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || { echo "Invalid ECS_ROUTE_OWNER" >&2; exit 1; }
 [[ "$COMPOSE_FILE" = /*.json && -f "$COMPOSE_FILE" && ! -L "$COMPOSE_FILE" ]]
 HEALTH_ATTEMPTS="${HEALTH_ATTEMPTS:-30}"
 [[ "$HEALTH_ATTEMPTS" =~ ^[1-9][0-9]*$ ]]
@@ -29,7 +31,7 @@ finish() {
   result=$?
   trap - EXIT
   if (( routes_applied )); then
-    python3 "$route_helper" restore "$route_file" "$release" "$PROJECT_NAME" || echo 'DOMAIN ROLLBACK FAILED; inspect private release snapshot' >&2
+    python3 "$route_helper" restore "$route_file" "$release" "$ECS_ROUTE_OWNER" || echo 'DOMAIN ROLLBACK FAILED; inspect private release snapshot' >&2
   fi
   if (( rollback_needed )); then
     echo 'Deployment failed; restoring previous container images' >&2
@@ -48,7 +50,7 @@ if [[ -n "${DOMAIN_ROUTES_JSON:-}" ]]; then
   # Hold across validation, update, health checks and final persistence.
   exec 7>"$(dirname "$route_file")/.routes.lock"
   flock -w 120 7 || { echo 'Another edge update is active'; exit 1; }
-  python3 "$route_helper" prepare "$route_file" "$release" "$PROJECT_NAME"
+  python3 "$route_helper" prepare "$route_file" "$release" "$ECS_ROUTE_OWNER"
 fi
 # Reject invalid mappings before authenticating or changing any containers.
 python3 - "$COMPOSE_FILE" "$candidate" "$DEPLOY_SERVICES_JSON" "$ACR_REGISTRY" "$ACR_NAMESPACE" "$VERSION" "$release/services" <<'PY'
@@ -100,7 +102,7 @@ done
 (( healthy )) || { echo 'Candidate health check failed'; exit 1; }
 if [[ -n "${DOMAIN_ROUTES_JSON:-}" ]]; then
   routes_applied=1
-  python3 "$route_helper" apply "$route_file" "$release" "$PROJECT_NAME"
+  python3 "$route_helper" apply "$route_file" "$release" "$ECS_ROUTE_OWNER"
   # Verify TLS and HTTP availability before committing the release.
   # The absolute deadline includes time spent in repository-specific wrappers.
   # Reserve the remote command's final 150s for normal rollback.

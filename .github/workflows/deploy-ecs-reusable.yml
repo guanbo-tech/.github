@@ -39,6 +39,7 @@ jobs:
       domain_routes: ${{ steps.manifest.outputs.domain_routes }}
       deploy_script: ${{ steps.manifest.outputs.deploy_script }}
       compose_file: ${{ steps.manifest.outputs.compose_file }}
+      route_owner: ${{ steps.manifest.outputs.route_owner }}
       project_name: ${{ steps.manifest.outputs.project_name }}
       deploy_services: ${{ steps.manifest.outputs.deploy_services }}
       local_health_url: ${{ steps.manifest.outputs.local_health_url }}
@@ -54,6 +55,7 @@ jobs:
           test -f "$CONFIG" || { echo "::error::Missing deployment manifest: $CONFIG"; exit 1; }
           jq -e '.services | type == "array" and length > 0' "$CONFIG" >/dev/null
           jq -e 'all(.services[]; (.name and .dockerfile))' "$CONFIG" >/dev/null
+          jq -e 'if has("route_owner") then (.route_owner | if type == "string" then test("^[a-z0-9][a-z0-9_-]*\\z") else false end) else true end' "$CONFIG" >/dev/null
           for name in ROLE_ARN OIDC_PROVIDER_ARN ACR_REGISTRY ACR_NAMESPACE ECS_INSTANCE_ID; do
             [[ -n "${!name:-}" ]] || { echo "::error::Missing deployment configuration: $name"; exit 1; }
           done
@@ -63,6 +65,7 @@ jobs:
             printf 'health_url='; jq -r '.health_url // empty' "$CONFIG"
             printf 'deploy_script='; jq -r '.deploy_script // "/opt/guanbo/deploy.sh"' "$CONFIG"
             printf 'compose_file='; jq -r '.compose_file // "/data/guanbo/production/compose.json"' "$CONFIG"
+            printf 'route_owner='; jq -r 'if has("route_owner") then .route_owner else (.project_name // "guanbo-production") end' "$CONFIG"
             printf 'project_name='; jq -r '.project_name // "guanbo-production"' "$CONFIG"
             printf 'deploy_services='; jq -c '.deploy_services // {api: "server", admin: "admin"}' "$CONFIG"
             printf 'local_health_url='; jq -r '.local_health_url // "http://127.0.0.1:3100/api/health"' "$CONFIG"
@@ -165,17 +168,19 @@ jobs:
           SCRIPT: ${{ needs.prepare.outputs.deploy_script }}
           DOMAIN_ROUTES_JSON: ${{ needs.prepare.outputs.domain_routes }}
           COMPOSE_FILE: ${{ needs.prepare.outputs.compose_file }}
+          ECS_ROUTE_OWNER: ${{ needs.prepare.outputs.route_owner }}
           PROJECT_NAME: ${{ needs.prepare.outputs.project_name }}
           DEPLOY_SERVICES_JSON: ${{ needs.prepare.outputs.deploy_services }}
           LOCAL_HEALTH_URL: ${{ needs.prepare.outputs.local_health_url }}
         run: |
           set -euo pipefail
           printf -v user_q '%q' "$ACR_USERNAME"; printf -v password_q '%q' "$ACR_PASSWORD"
+          printf -v owner_q '%q' "$ECS_ROUTE_OWNER"
           printf -v compose_q '%q' "$COMPOSE_FILE"; printf -v project_q '%q' "$PROJECT_NAME"; printf -v services_q '%q' "$DEPLOY_SERVICES_JSON"; printf -v health_q '%q' "$LOCAL_HEALTH_URL"
           printf -v routes_q '%q' "$DOMAIN_ROUTES_JSON"
           printf -v registry_q '%q' "$ACR_REGISTRY"; printf -v namespace_q '%q' "$ACR_NAMESPACE"
           printf -v script_q '%q' "$SCRIPT"; printf -v version_q '%q' "$VERSION"
-          command_content="export ECS_RELEASE_DEADLINE_EPOCH=\$((\$(date +%s) + 450)); export DOMAIN_ROUTES_JSON=$routes_q ACR_REGISTRY=$registry_q ACR_NAMESPACE=$namespace_q ACR_USERNAME=$user_q ACR_PASSWORD=$password_q COMPOSE_FILE=$compose_q PROJECT_NAME=$project_q DEPLOY_SERVICES_JSON=$services_q LOCAL_HEALTH_URL=$health_q; bash $script_q $version_q"
+          command_content="export ECS_RELEASE_DEADLINE_EPOCH=\$((\$(date +%s) + 450)); export ECS_ROUTE_OWNER=$owner_q DOMAIN_ROUTES_JSON=$routes_q ACR_REGISTRY=$registry_q ACR_NAMESPACE=$namespace_q ACR_USERNAME=$user_q ACR_PASSWORD=$password_q COMPOSE_FILE=$compose_q PROJECT_NAME=$project_q DEPLOY_SERVICES_JSON=$services_q LOCAL_HEALTH_URL=$health_q; bash $script_q $version_q"
           invocation_id="$(aliyun ecs RunCommand --RegionId "$REGION_ID" --InstanceId.1 "$INSTANCE_ID" --Type RunShellScript --Timeout 600 --CommandContent "$command_content" --cli-query 'InvokeId' | python3 -c 'import json,sys; print(json.load(sys.stdin))')"
           for _ in $(seq 1 60); do
             status="$(aliyun ecs DescribeInvocations --RegionId "$REGION_ID" --InstanceId "$INSTANCE_ID" --InvokeId "$invocation_id" --cli-query 'Invocations.Invocation[0].InvocationStatus' | python3 -c 'import json,sys; print(json.load(sys.stdin))')"

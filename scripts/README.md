@@ -80,3 +80,21 @@ HTTPS failure restoring the route and container together. They do not prove
 public ACME issuance or application business behavior. Production defaults can
 be overridden only for isolated tests with ECS_EDGE_CONTAINER, ECS_CADDYFILE,
 and ECS_CADDY_ADMIN. The global lock follows the configured Caddyfile directory.
+
+### Independent route owners within one Compose project
+
+A deployment manifest may set `"route_owner": "werss"`. The value must match
+`[a-z0-9][a-z0-9_-]*`. If omitted, it defaults to `project_name` (or the
+existing `guanbo-production` default). Direct script callers may set
+`ECS_ROUTE_OWNER`; if unset it defaults to `PROJECT_NAME`.
+
+Independent releases sharing one Compose project **must use distinct route
+owners**, for example `spider` and `werss`. Each release replaces only its
+owner's route block. `"domain_routes": {}` removes only that owner's routes;
+omitting `domain_routes` leaves routes untouched. Compose project identity,
+deployment locking, route locking, deadline and rollback behavior are unchanged.
+
+When adopting explicit owners for existing routes, first plan the existing
+project-owned block's transition: changing owner does not automatically move
+previously owned domains. A domain still claimed by another owner is rejected.
+Do not remove a legacy shared block until its peer routes are accounted for.
