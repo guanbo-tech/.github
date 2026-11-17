@@ -91,6 +91,22 @@ jobs:
           role-session-name: github-${{ github.run_id }}-${{ matrix.name }}
           role-session-expiration: 1800
           audience: sts.aliyuncs.com
+      - name: Ensure private image repository exists
+        env:
+          REPO_NAME: ${{ matrix.name }}
+        run: |
+          set -euo pipefail
+          common=(--region "$ALIBABA_CLOUD_REGION" --endpoint "cr.${ALIBABA_CLOUD_REGION}.aliyuncs.com" --InstanceId "$ACR_INSTANCE_ID" --RepoNamespaceName "$ACR_NAMESPACE" --RepoName "$REPO_NAME")
+          result="$(aliyun cr GetRepository "${common[@]}")"
+          if jq -e '.IsSuccess == true and .RepoStatus == "NORMAL"' <<<"$result" >/dev/null; then
+            exit 0
+          fi
+          if [[ "$(jq -r '.Code' <<<"$result")" != REPO_NOT_EXIST ]]; then
+            jq '{Code,IsSuccess,RepoStatus}' <<<"$result"
+            exit 1
+          fi
+          result="$(aliyun cr CreateRepository "${common[@]}" --RepoType PRIVATE --Summary "GitHub Actions managed image" --RepoBuildType MANUAL)"
+          jq -e '.IsSuccess == true' <<<"$result" >/dev/null || { jq '{Code,IsSuccess}' <<<"$result"; exit 1; }
       - name: Get temporary ACR credentials
         id: acr
         run: |
