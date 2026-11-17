@@ -1,0 +1,147 @@
+name: Reusable ECS deployment
+on:
+  workflow_call:
+    inputs:
+      config:
+        description: Repository-relative JSON deployment manifest
+        required: true
+        type: string
+      environment:
+        description: GitHub environment containing deployment access
+        required: false
+        default: production
+        type: string
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: ecs-${{ github.repository }}-${{ inputs.environment }}
+  cancel-in-progress: false
+env:
+  ALIBABA_CLOUD_REGION: ${{ vars.ALIBABA_CLOUD_REGION || 'ap-southeast-1' }}
+  ACR_REGISTRY: ${{ vars.ACR_REGISTRY }}
+  ACR_NAMESPACE: ${{ vars.ACR_NAMESPACE }}
+  ACR_INSTANCE_ID: ${{ vars.ACR_INSTANCE_ID || 'cri-tcv1od4drf2uv0br' }}
+  ECS_INSTANCE_ID: ${{ vars.ECS_INSTANCE_ID }}
+jobs:
+  prepare:
+    name: Validate deployment manifest
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    outputs:
+      services: ${{ steps.manifest.outputs.services }}
+      health_url: ${{ steps.manifest.outputs.health_url }}
+      deploy_script: ${{ steps.manifest.outputs.deploy_script }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: manifest
+        env:
+          CONFIG: ${{ inputs.config }}
+          ROLE_ARN: ${{ secrets.ALIBABA_CLOUD_ROLE_ARN }}
+          OIDC_PROVIDER_ARN: ${{ secrets.ALIBABA_CLOUD_OIDC_PROVIDER_ARN }}
+        run: |
+          set -euo pipefail
+          test -f "$CONFIG" || { echo "::error::Missing deployment manifest: $CONFIG"; exit 1; }
+          jq -e '.services | type == "array" and length > 0' "$CONFIG" >/dev/null
+          jq -e 'all(.services[]; (.name and .dockerfile))' "$CONFIG" >/dev/null
+          for name in ROLE_ARN OIDC_PROVIDER_ARN ACR_REGISTRY ACR_NAMESPACE ECS_INSTANCE_ID; do
+            [[ -n "${!name:-}" ]] || { echo "::error::Missing deployment configuration: $name"; exit 1; }
+          done
+          jq -c '.services' "$CONFIG" | sed 's/^/services=/' >> "$GITHUB_OUTPUT"
+          jq -r '.health_url // empty' "$CONFIG" | sed 's/^/health_url=/' >> "$GITHUB_OUTPUT"
+          jq -r '.deploy_script // "/opt/guanbo/deploy.sh"' "$CONFIG" | sed 's/^/deploy_script=/' >> "$GITHUB_OUTPUT"
+  build-and-push:
+    name: Build and push ${{ matrix.name }}
+    needs: prepare
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.services) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Alibaba Cloud CLI
+        run: |
+          curl --fail --silent --show-error --location https://aliyuncli.alicdn.com/aliyun-cli-linux-latest-amd64.tgz --output "$RUNNER_TEMP/aliyun-cli.tgz"
+          tar --extract --gzip --file "$RUNNER_TEMP/aliyun-cli.tgz" --directory "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Configure Alibaba Cloud credentials
+        uses: aliyun/configure-aliyun-credentials-action@v1
+        with:
+          role-to-assume: ${{ secrets.ALIBABA_CLOUD_ROLE_ARN }}
+          oidc-provider-arn: ${{ secrets.ALIBABA_CLOUD_OIDC_PROVIDER_ARN }}
+          role-session-name: github-${{ github.run_id }}-${{ matrix.name }}
+          role-session-expiration: 1800
+          audience: sts.aliyuncs.com
+      - name: Get temporary ACR credentials
+        id: acr
+        run: |
+          set -euo pipefail
+          token_json="$(aliyun cr GetAuthorizationToken --region "$ALIBABA_CLOUD_REGION" --endpoint "cr.${ALIBABA_CLOUD_REGION}.aliyuncs.com" --InstanceId "$ACR_INSTANCE_ID" --ExpiresInHours 1)"
+          echo "$token_json" | jq -e '.IsSuccess != false and (.AuthorizationToken | length > 0)'
+          password="$(jq -r '.AuthorizationToken' <<<"$token_json")"; echo "::add-mask::$password"
+          echo "username=$(jq -r '.TempUsername' <<<"$token_json")" >> "$GITHUB_OUTPUT"; echo "password=$password" >> "$GITHUB_OUTPUT"
+      - name: Log in to ACR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ACR_REGISTRY }}
+          username: ${{ steps.acr.outputs.username }}
+          password: ${{ steps.acr.outputs.password }}
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context || '.' }}
+          file: ${{ matrix.dockerfile }}
+          build-args: ${{ join(matrix.build_args || fromJSON('[]'), '\n') }}
+          push: true
+          tags: ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/${{ matrix.name }}:${{ github.ref_name }}
+  deploy:
+    name: Deploy all services to ECS
+    needs: [prepare, build-and-push]
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Install Alibaba Cloud CLI
+        run: |
+          curl --fail --silent --show-error --location https://aliyuncli.alicdn.com/aliyun-cli-linux-latest-amd64.tgz --output "$RUNNER_TEMP/aliyun-cli.tgz"
+          tar --extract --gzip --file "$RUNNER_TEMP/aliyun-cli.tgz" --directory "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Configure Alibaba Cloud credentials
+        uses: aliyun/configure-aliyun-credentials-action@v1
+        with:
+          role-to-assume: ${{ secrets.ALIBABA_CLOUD_ROLE_ARN }}
+          oidc-provider-arn: ${{ secrets.ALIBABA_CLOUD_OIDC_PROVIDER_ARN }}
+          role-session-name: github-${{ github.run_id }}
+          role-session-expiration: 1800
+          audience: sts.aliyuncs.com
+      - name: Get temporary ACR credentials
+        id: acr
+        run: |
+          set -euo pipefail
+          token_json="$(aliyun cr GetAuthorizationToken --region "$ALIBABA_CLOUD_REGION" --endpoint "cr.${ALIBABA_CLOUD_REGION}.aliyuncs.com" --InstanceId "$ACR_INSTANCE_ID" --ExpiresInHours 1)"
+          echo "$token_json" | jq -e '.IsSuccess != false and (.AuthorizationToken | length > 0)'
+          password="$(jq -r '.AuthorizationToken' <<<"$token_json")"; echo "::add-mask::$password"
+          echo "ACR_USERNAME=$(jq -r '.TempUsername' <<<"$token_json")" >> "$GITHUB_ENV"; echo "ACR_PASSWORD=$password" >> "$GITHUB_ENV"
+      - name: Run ECS deployment script
+        env:
+          REGION_ID: ${{ env.ALIBABA_CLOUD_REGION }}
+          INSTANCE_ID: ${{ env.ECS_INSTANCE_ID }}
+          VERSION: ${{ github.ref_name }}
+          SCRIPT: ${{ needs.prepare.outputs.deploy_script }}
+        run: |
+          set -euo pipefail
+          printf -v user_q '%q' "$ACR_USERNAME"; printf -v password_q '%q' "$ACR_PASSWORD"
+          command_content="export ACR_REGISTRY='$ACR_REGISTRY' ACR_NAMESPACE='$ACR_NAMESPACE' ACR_USERNAME=$user_q ACR_PASSWORD=$password_q; bash $SCRIPT $VERSION"
+          invocation_id="$(aliyun ecs RunCommand --RegionId "$REGION_ID" --InstanceId.1 "$INSTANCE_ID" --Type RunShellScript --Timeout 600 --CommandContent "$command_content" --cli-query 'InvokeId' | python3 -c 'import json,sys; print(json.load(sys.stdin))')"
+          for _ in $(seq 1 60); do
+            status="$(aliyun ecs DescribeInvocations --RegionId "$REGION_ID" --InstanceId "$INSTANCE_ID" --InvokeId "$invocation_id" --cli-query 'Invocations.Invocation[0].InvocationStatus' | python3 -c 'import json,sys; print(json.load(sys.stdin))')"
+            case "$status" in Success) exit 0;; Failed|Error|Stopped|Timeout) echo "ECS deployment failed: $status"; exit 1;; esac; sleep 10
+          done
+          echo 'Timed out waiting for ECS deployment'; exit 1
+      - name: Verify health
+        env:
+          HEALTH_URL: ${{ needs.prepare.outputs.health_url }}
+        run: |
+          for _ in $(seq 1 12); do curl --fail --silent --show-error --connect-timeout 5 --max-time 15 "$HEALTH_URL" && exit 0; sleep 10; done
+          echo "Health check failed: $HEALTH_URL"; exit 1
