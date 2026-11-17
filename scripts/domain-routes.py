@@ -53,20 +53,22 @@ def main():
     source, release = Path(source), Path(release)
     if source.is_symlink() or not source.is_file():
         raise ValueError('Caddyfile must be a regular file')
+    edge = os.environ.get('ECS_EDGE_CONTAINER', 'seewiki-edge')
     backup, candidate = release/'Caddyfile.previous', release/'Caddyfile.candidate'
     if mode == 'prepare':
         routes = json.loads(os.environ['DOMAIN_ROUTES_JSON'])
         text = source.read_text()
         candidate.write_text(render(text, owner, routes))
         backup.write_bytes(source.read_bytes())
-        run('docker','cp',str(candidate),'seewiki-edge:/tmp/ecs-candidate.Caddyfile')
+        run('docker','cp',str(candidate),edge+':/tmp/ecs-candidate.Caddyfile')
         try:
-            run('docker','exec','seewiki-edge','caddy','validate','--config','/tmp/ecs-candidate.Caddyfile','--adapter','caddyfile')
+            run('docker','exec',edge,'caddy','validate','--config','/tmp/ecs-candidate.Caddyfile','--adapter','caddyfile')
         finally:
-            run('docker','exec','seewiki-edge','rm','-f','/tmp/ecs-candidate.Caddyfile')
+            run('docker','exec',edge,'rm','-f','/tmp/ecs-candidate.Caddyfile')
     elif mode in ('apply','restore'):
         write_in_place(source, (candidate if mode == 'apply' else backup).read_bytes())
-        run('docker','exec','seewiki-edge','caddy','reload','--config','/etc/caddy/Caddyfile','--adapter','caddyfile')
+        address = ['--address', os.environ['ECS_CADDY_ADMIN']] if os.environ.get('ECS_CADDY_ADMIN') else []
+        run('docker','exec',edge,'caddy','reload','--config','/etc/caddy/Caddyfile','--adapter','caddyfile',*address)
     else:
         raise ValueError('Unknown route operation')
 

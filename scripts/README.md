@@ -40,7 +40,7 @@ Existing domains outside the owner's block, wildcard sites and imports fail
 closed and require a deliberate one-time adoption/review. Existing manual routes
 are never silently adopted or overwritten.
 
-Install `domain-routes.py` alongside `deploy.sh`. The edge container must be named
+Install `domain-routes.py` alongside `deploy.sh`. The default edge container is
 `seewiki-edge`, with `/data/guanbo/edge/Caddyfile` bound to
 `/etc/caddy/Caddyfile`. All managed updates share `/data/guanbo/edge/.routes.lock`;
 manual editors must also honor that lock. Validation uses a private candidate
@@ -64,3 +64,19 @@ uncooperative manual edits require operator recovery; normal errors restore the
 previous in-place file and reload it. Domain rollback failure is explicitly
 reported. Production rollout still requires a real isolated Caddy/TLS rehearsal;
 unit tests only verify ownership, conflict rejection and inode preservation.
+
+
+Linux integration checks (loopback ports 15000, 18099, 18088, 14443, 22019 must
+be free):
+
+```sh
+python3 tests/integration-domain-routes.py
+python3 tests/integration-route-release.py
+```
+
+These use disposable Caddy/registry/application containers and a private test CA.
+They validate real TLS, redirects, reload failure recovery, lock waiting, and
+HTTPS failure restoring the route and container together. They do not prove
+public ACME issuance or application business behavior. Production defaults can
+be overridden only for isolated tests with ECS_EDGE_CONTAINER, ECS_CADDYFILE,
+and ECS_CADDY_ADMIN. The global lock follows the configured Caddyfile directory.

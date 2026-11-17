@@ -47,4 +47,17 @@ PY
 for _ in $(seq 1 20); do curl -fsS "$LOCAL_HEALTH_URL" >/dev/null && break; sleep 1; done
 curl -fsS "$LOCAL_HEALTH_URL" >/dev/null
 test -z "$(find "$root" -type d -name auth -print -quit)"
+if [[ "${DOMAIN_ROUTE_TEST:-}" == 1 ]]; then
+  cp "$ECS_CADDYFILE" "$root/Caddyfile.before-https-failure"
+  export DOMAIN_ROUTES_JSON='{"route-probe.seewiki.net":18098}'
+  export ECS_RELEASE_DEADLINE_EPOCH="$(($(date +%s) + 3))"
+  if bash "$runner" good > "$root/https-failure.log" 2>&1; then
+    echo 'Unreachable HTTPS upstream unexpectedly succeeded'; exit 1
+  fi
+  cmp "$ECS_CADDYFILE" "$root/Caddyfile.before-https-failure"
+  grep -q 'Previous images restored' "$root/https-failure.log"
+  for _ in $(seq 1 20); do curl -fsS https://route-probe.seewiki.net/ >/dev/null && break; sleep 1; done
+  curl -fsS https://route-probe.seewiki.net/ >/dev/null
+  echo 'PASS: HTTPS readiness failure restored both route and container'
+fi
 echo 'PASS: real pull, successful release, failed candidate, restored image, persisted rollback and HTTP recovery'
